@@ -183,9 +183,6 @@ class EventCount {
     std::atomic<uint64_t> wait_sense;
     std::atomic_flag flag = ATOMIC_FLAG_INIT;
     uint64_t epoch = 0;
-    uint64_t tid = 0;
-    uint64_t num_waits = 0;
-    bool locked = false;
     unsigned state = kNotSignaled;
     enum {
       kNotSignaled,
@@ -193,10 +190,7 @@ class EventCount {
       kSignaled,
     };
     void wait() {
-      if (!tid) tid = getTID();
-      assert(locked);
       uint64_t old_sense = wait_sense;
-      num_waits++;
       unlock();
       while (old_sense == wait_sense.load());
     }
@@ -205,15 +199,9 @@ class EventCount {
     }
     void lock() {
       while(flag.test_and_set());
-      locked = true;
     }
     void unlock() {
       flag.clear();
-    }
-  public:
-    ~Waiter() {
-      printf("[%llu] notifies=%llu waits=%llu\n",
-          tid, wait_sense.load(), num_waits);
     }
   };
 
