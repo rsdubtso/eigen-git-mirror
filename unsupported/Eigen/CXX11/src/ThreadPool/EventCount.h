@@ -10,18 +10,12 @@
 #ifndef EIGEN_CXX11_THREADPOOL_EVENTCOUNT_H_
 #define EIGEN_CXX11_THREADPOOL_EVENTCOUNT_H_
 
-#include <pthread.h>
+#include <thread>
 #include <cstdio>
 #include <atomic>
 #include <cassert>
 
 namespace Eigen {
-
-uint64_t getTID() {
-  uint64_t tid;
-  pthread_threadid_np(NULL, &tid);
-  return tid;
-}
 
 // EventCount allows to wait for arbitrary predicates in non-blocking
 // algorithms. Think of condition variable, but wait predicate does not need to
@@ -180,8 +174,6 @@ class EventCount {
     // Align to 128 byte boundary to prevent false sharing with other Waiter
     // objects in the same vector.
     EIGEN_ALIGN_TO_BOUNDARY(128) std::atomic<uint64_t> next;
-    std::atomic<uint64_t> wait_sense;
-    std::atomic_flag flag = ATOMIC_FLAG_INIT;
     uint64_t epoch = 0;
     unsigned state = kNotSignaled;
     enum {
@@ -189,19 +181,29 @@ class EventCount {
       kWaiting,
       kSignaled,
     };
-    void wait() {
-      uint64_t old_sense = wait_sense;
-      unlock();
-      while (old_sense == wait_sense.load());
-    }
-    void notify() {
-      wait_sense++;
-    }
+
+    std::atomic<bool> locked;
     void lock() {
-      while(flag.test_and_set());
+      while (!locked.exchange(true, std::memory_order_acquire));
+        // std::this_thread::yield();
     }
+
     void unlock() {
-      flag.clear();
+      locked.store(false, std::memory_order_release);
+    }
+
+    std::atomic<uint64_t> wait_sense{0};
+    void wait() {
+      eigen_plain_assert(locked.load() == true);
+      uint64_t old_sense = wait_sense.load();
+      unlock();
+      while(old_sense == wait_sense.load());
+        // std::this_thread::yield();
+    }
+
+    void notify() {
+      eigen_plain_assert(locked.load() == true);
+      wait_sense++;
     }
   };
 
@@ -258,10 +260,10 @@ class EventCount {
       w->lock();
       unsigned state = w->state;
       w->state = Waiter::kSignaled;
-      w->unlock();
-
       // Avoid notifying if it wasn't waiting.
-      if (state == Waiter::kWaiting) w->notify();
+      if (state == Waiter::kWaiting)
+        w->notify();
+      w->unlock();
     }
   }
 

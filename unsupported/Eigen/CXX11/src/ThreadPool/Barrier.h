@@ -59,6 +59,26 @@ struct Notification : Barrier {
   Notification() : Barrier(1){};
 };
 
+// Simple busy-wait spinlock (Lockable)
+class BWSpinLock {
+ public:
+  bool try_lock_() {
+    bool expected = false;
+    return flag_.compare_exchange_strong(
+        expected, true, std::memory_order_acquire);
+  }
+  void lock() {
+    while (!try_lock_());
+    eigen_plain_assert(flag_.load() == true);
+  }
+  void unlock() {
+    eigen_plain_assert(flag_.load() == true);
+    flag_.store(false, std::memory_order_release);
+  }
+ private:
+  std::atomic<bool> flag_{false};
+};
+
 }  // namespace Eigen
 
 #endif  // EIGEN_CXX11_THREADPOOL_BARRIER_H
