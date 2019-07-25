@@ -15,6 +15,8 @@
 #include <atomic>
 #include <cassert>
 
+#include "Barrier.h"
+
 namespace Eigen {
 
 // EventCount allows to wait for arbitrary predicates in non-blocking
@@ -182,27 +184,21 @@ class EventCount {
       kSignaled,
     };
 
-    std::atomic<bool> locked;
-    void lock() {
-      while (!locked.exchange(true, std::memory_order_acquire));
-        // std::this_thread::yield();
-    }
-
-    void unlock() {
-      locked.store(false, std::memory_order_release);
-    }
+    BWSpinLock spinlock;
+    void lock() { spinlock.lock(); }
+    void unlock() { spinlock.unlock(); }
 
     std::atomic<uint64_t> wait_sense{0};
     void wait() {
-      eigen_plain_assert(locked.load() == true);
       uint64_t old_sense = wait_sense.load();
       unlock();
-      while(old_sense == wait_sense.load());
-        // std::this_thread::yield();
+      while(old_sense == wait_sense.load())
+        std::this_thread::yield();
+      lock();
     }
 
     void notify() {
-      eigen_plain_assert(locked.load() == true);
+      // requires that w is locked?
       wait_sense++;
     }
   };
@@ -248,8 +244,9 @@ class EventCount {
     w->lock();
     while (w->state != Waiter::kSignaled) {
       w->state = Waiter::kWaiting;
-      w->wait();
+      w->wait(); // calls w->unlock() before waiting and then locks again
     }
+    w->unlock();
   }
 
   void Unpark(Waiter* w) {
