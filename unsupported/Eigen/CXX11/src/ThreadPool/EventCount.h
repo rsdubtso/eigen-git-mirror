@@ -189,14 +189,27 @@ class EventCount {
     void unlock() { spinlock.unlock(); }
 
     std::atomic<uint64_t> wait_sense{0};
+    uint64_t old_sense{0};
     void wait() {
-      uint64_t old_sense = wait_sense.load();
       unlock();
-      while(old_sense == wait_sense.load())
-        std::this_thread::yield();
+      // Only a single thread can be waiting...
+      uint64_t spin_count = 0;
+      for (;;) {
+        uint64_t cur_sense = wait_sense.load();
+        if (old_sense != cur_sense) {
+          old_sense = cur_sense;
+          break;
+        }
+        ++spin_count;
+        if (spin_count > 1000)
+          __asm__ __volatile__("pause");
+        if (spin_count > 100000) {
+          std::this_thread::yield();
+          spin_count = 1000;
+        }
+      }
       lock();
     }
-
     void notify() {
       // requires that w is locked?
       wait_sense++;
