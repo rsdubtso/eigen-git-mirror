@@ -135,6 +135,24 @@ class ThreadPoolTempl : public Eigen::ThreadPoolInterface {
     }
   }
 
+  void ScheduleToAllThreads(const std::function<void(int)> &fn) override {
+    PerThread* pt = GetPerThread();
+    if (pt->pool == this) {
+      // TODO: fail
+      abort();
+    }
+    for (int i = 0; i < num_threads_; i++) {
+      Task t = env_.CreateTask([i, fn](){ fn(i); });
+      Queue& q = thread_data_[i].queue;
+      t = q.PushBack(std::move(t));
+      if (t.f) {
+        // TODO: handle errors
+        abort();
+      }
+    }
+    ec_.Notify(true);
+  }
+
   void Cancel() EIGEN_OVERRIDE {
     cancelled_ = true;
     done_ = true;

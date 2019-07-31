@@ -28,6 +28,11 @@ class ThreadPoolInterface {
     Schedule(fn);
   }
 
+  virtual void ScheduleToAllThreads(const std::function<void(int)> &fn) {
+    for (int i = 0; i < NumThreads(); i++)
+      ScheduleWithHint([i, fn](){fn(i);}, i, i + 1);
+  }
+
   // If implemented, stop processing the closures that have been enqueued.
   // Currently running closures may still be processed.
   // If not implemented, does nothing.
