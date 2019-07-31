@@ -10,13 +10,6 @@
 #ifndef EIGEN_CXX11_THREADPOOL_EVENTCOUNT_H_
 #define EIGEN_CXX11_THREADPOOL_EVENTCOUNT_H_
 
-#include <thread>
-#include <cstdio>
-#include <atomic>
-#include <cassert>
-
-#include "Barrier.h"
-
 namespace Eigen {
 
 // EventCount allows to wait for arbitrary predicates in non-blocking
@@ -176,6 +169,8 @@ class EventCount {
     // Align to 128 byte boundary to prevent false sharing with other Waiter
     // objects in the same vector.
     EIGEN_ALIGN_TO_BOUNDARY(128) std::atomic<uint64_t> next;
+    std::mutex mu;
+    std::condition_variable cv;
     uint64_t epoch = 0;
     unsigned state = kNotSignaled;
     enum {
@@ -183,37 +178,6 @@ class EventCount {
       kWaiting,
       kSignaled,
     };
-
-    BWSpinLock spinlock;
-    void lock() { spinlock.lock(); }
-    void unlock() { spinlock.unlock(); }
-
-    std::atomic<uint64_t> wait_sense{0};
-    uint64_t old_sense{0};
-    void wait() {
-      unlock();
-      // Only a single thread can be waiting...
-      uint64_t spin_count = 0;
-      for (;;) {
-        uint64_t cur_sense = wait_sense.load();
-        if (old_sense != cur_sense) {
-          old_sense = cur_sense;
-          break;
-        }
-        ++spin_count;
-        if (spin_count > 1000)
-          __asm__ __volatile__("pause");
-        if (spin_count > 100000) {
-          std::this_thread::yield();
-          spin_count = 1000;
-        }
-      }
-      lock();
-    }
-    void notify() {
-      // requires that w is locked?
-      wait_sense++;
-    }
   };
 
  private:
@@ -254,26 +218,25 @@ class EventCount {
   }
 
   void Park(Waiter* w) {
-    w->lock();
+    std::unique_lock<std::mutex> lock(w->mu);
     while (w->state != Waiter::kSignaled) {
       w->state = Waiter::kWaiting;
-      w->wait(); // calls w->unlock() before waiting and then locks again
+      w->cv.wait(lock);
     }
-    w->unlock();
   }
 
   void Unpark(Waiter* w) {
     for (Waiter* next; w; w = next) {
       uint64_t wnext = w->next.load(std::memory_order_relaxed) & kStackMask;
       next = wnext == kStackMask ? nullptr : &waiters_[wnext];
-
-      w->lock();
-      unsigned state = w->state;
-      w->state = Waiter::kSignaled;
+      unsigned state;
+      {
+        std::unique_lock<std::mutex> lock(w->mu);
+        state = w->state;
+        w->state = Waiter::kSignaled;
+      }
       // Avoid notifying if it wasn't waiting.
-      if (state == Waiter::kWaiting)
-        w->notify();
-      w->unlock();
+      if (state == Waiter::kWaiting) w->cv.notify_one();
     }
   }
 
@@ -284,5 +247,3 @@ class EventCount {
 }  // namespace Eigen
 
 #endif  // EIGEN_CXX11_THREADPOOL_EVENTCOUNT_H_
-
-// vim: ts=2 sw=2

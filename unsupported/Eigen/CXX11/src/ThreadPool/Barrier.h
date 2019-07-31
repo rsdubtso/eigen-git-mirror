@@ -13,12 +13,6 @@
 #ifndef EIGEN_CXX11_THREADPOOL_BARRIER_H
 #define EIGEN_CXX11_THREADPOOL_BARRIER_H
 
-#include <unistd.h>
-#include <sys/syscall.h>
-
-#include <atomic>
-#include <thread>
-
 namespace Eigen {
 
 class Barrier {
@@ -65,61 +59,6 @@ struct Notification : Barrier {
   Notification() : Barrier(1){};
 };
 
-inline int gettid() {
-  return syscall(__NR_gettid);
-}
-
-// Simple busy-wait spinlock (Lockable)
-class BWSpinLock {
- public:
-  bool try_lock_() {
-    bool expected = false;
-    return flag_.compare_exchange_strong(
-        expected, true, std::memory_order_acquire);
-  }
-  void lock() {
-#ifndef NDEBUG
-    int this_thread_tid = gettid();
-    int owner_thread_tid = owner_tid_.load();
-    if (this_thread_tid == owner_thread_tid) {
-      printf("\033[0;31mRecursive lock!\033[0m\n");
-      eigen_plain_assert(owner_thread_tid != this_thread_tid);
-    }
-
-    uint64_t spin_count = 0;
-#endif
-    while (!try_lock_()) {
-#ifndef NDEBUG
-      if (++spin_count > 10000000) {
-        printf("\033[0;31mThread %d stuck waiting for thread %d "
-            "to release the lock\033[0m\n", this_thread_tid, owner_thread_tid);
-        spin_count = 0;
-      }
-#endif
-      std::this_thread::yield();
-    };
-#ifndef NDEBUG
-    owner_tid_.store(gettid());
-#endif
-    eigen_plain_assert(flag_.load() == true);
-  }
-  void unlock() {
-    eigen_plain_assert(flag_.load() == true);
-#ifndef NDEBUG
-    eigen_plain_assert(gettid() == owner_tid_.load());
-    owner_tid_.store(0, std::memory_order_release);
-#endif
-    flag_.store(false, std::memory_order_release);
-  }
- private:
-#ifndef NDEBUG
-  std::atomic<int> owner_tid_{0};
-#endif
-  std::atomic<bool> flag_{false};
-};
-
 }  // namespace Eigen
 
 #endif  // EIGEN_CXX11_THREADPOOL_BARRIER_H
-
-// vim: ts=2 sw=2
